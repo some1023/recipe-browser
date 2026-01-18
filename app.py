@@ -1,5 +1,6 @@
 import streamlit as st
 import requests
+import urllib.parse
 
 # --- セキュリティ対策 ---
 try:
@@ -15,14 +16,15 @@ st.set_page_config(page_title="楽々レシピ検索 Pro", page_icon="🍳")
 st.markdown("""
     <style>
     .stButton>button { width: 100%; border-radius: 10px; height: 3em; }
+    .search-box { background-color: #fff4f4; padding: 20px; border-radius: 15px; margin-bottom: 20px; }
     </style>
     """, unsafe_allow_html=True)
 
-st.title("🍳 楽々レシピ検索")
-st.caption("スペース区切りで複数の具材を組み合わせて検索できます。")
+st.title("🍳 楽々レシピ検索 Pro")
+st.caption("ランキングがない場合は、公式の検索結果へスムーズにご案内します。")
 
 # --- 共通関数の定義 ---
-@st.cache_data(ttl=86400) # カテゴリ一覧は1日キャッシュする
+@st.cache_data(ttl=86400)
 def get_categories():
     url = "https://app.rakuten.co.jp/services/api/Recipe/CategoryList/20170426"
     res = requests.get(url, params={"format": "json", "applicationId": RAKUTEN_APP_ID})
@@ -51,23 +53,19 @@ def send_to_discord(recipe):
     st.toast(f"「{recipe['recipeTitle']}」を送信しました！")
 
 # --- メイン機能 ---
-# 1. カテゴリデータの取得
 with st.spinner('カテゴリ準備中...'):
     categories = get_categories()
 
-# 2. 検索キーワード入力
+# 入力エリア
 keyword_input = st.text_input("具材を入力（スペースで複数指定）", placeholder="例：なす 豚肉")
 
 if keyword_input:
-    # 入力された文字をスペースで分割してリストにする（全角スペースにも対応）
     keywords = keyword_input.replace('　', ' ').split()
-    
     matched_list = []
+    
     for level in ['large', 'medium', 'small']:
         for cat in categories.get(level, []):
             cat_name = cat['categoryName']
-            
-            # 【ここが重要！】すべてのキーワードがカテゴリ名に含まれているかチェック
             if all(k in cat_name for k in keywords):
                 cid = cat['categoryId']
                 if 'parentCategoryId' in cat:
@@ -75,10 +73,11 @@ if keyword_input:
                 matched_list.append({"name": cat_name, "id": cid})
 
     if not matched_list:
-        st.warning(f"「{' + '.join(keywords)}」を両方含むカテゴリは見つかりませんでした。")
+        st.warning(f"「{' + '.join(keywords)}」に一致するカテゴリはありません。")
+        # カテゴリがなくても、キーワードで直接公式検索へ
+        search_url = f"https://recipe.rakuten.co.jp/search/{urllib.parse.quote(' '.join(keywords))}/"
+        st.link_button(f"🔍 楽天レシピで「{' '.join(keywords)}」を直接検索する", search_url)
     else:
-        st.success(f"一致するカテゴリが {len(matched_list)} 件見つかりました。")
-        
         options = {item['name']: item['id'] for item in matched_list}
         selected_cat_name = st.selectbox("カテゴリを選択:", list(options.keys()))
         selected_cat_id = options[selected_cat_name]
@@ -87,19 +86,24 @@ if keyword_input:
             recipes = get_ranking(selected_cat_id)
             
             if not recipes:
-                st.info("現在ランキングデータがありません。")
+                # 【今回のポイント】ランキングがない場合の処理
+                st.info(f"「{selected_cat_name}」のランキングは現在ありませんでした。")
+                # 公式検索ページへのURLを作成（キーワードをURL用に変換）
+                search_url = f"https://recipe.rakuten.co.jp/search/{urllib.parse.quote(selected_cat_name)}/"
+                
+                st.write("代わりに楽天レシピの**公式検索結果**を見てみましょう！")
+                st.link_button(f"👉 「{selected_cat_name}」の全レシピを見る", search_url)
             else:
                 for r in recipes:
                     with st.container(border=True):
                         st.subheader(r['recipeTitle'])
                         st.image(r['foodImageUrl'], use_container_width=True)
                         st.write(f"⏱ {r['recipeIndication']} / 💰 {r['recipeCost']}")
-                        
                         col1, col2 = st.columns(2)
                         with col1:
-                            st.link_button("レシピを見る", r['recipeUrl'])
+                            st.link_button("詳細を見る", r['recipeUrl'])
                         with col2:
-                            if st.button("Discord送信", key=f"ds_{r['recipeId']}"):
+                            if st.button("Discordへ", key=f"ds_{r['recipeId']}"):
                                 send_to_discord(r)
 
 st.markdown("---")
